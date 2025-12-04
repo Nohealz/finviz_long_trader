@@ -8,6 +8,17 @@ import requests
 from bs4 import BeautifulSoup
 
 
+_SYMBOL_PATTERN = re.compile(r"^[A-Z](?:[A-Z0-9]{0,4})(?:[.-][A-Z0-9]{1,2})?$")
+_ANCHOR_PATTERN = re.compile(r"quote\.ashx\?t=", re.IGNORECASE)
+
+
+def _is_valid_symbol(text: str) -> bool:
+    """
+    Ensure the parsed text looks like a real ticker (reject stray '-' rows, etc.).
+    """
+    return bool(_SYMBOL_PATTERN.fullmatch(text))
+
+
 class FinvizScreenerClient:
     """
     Lightweight Finviz Elite screener client. All scraping logic is contained here
@@ -34,18 +45,30 @@ class FinvizScreenerClient:
     def parse_symbols(self, html: str) -> List[str]:
         soup = BeautifulSoup(html, "lxml")
         symbols = set()
-        anchor_pattern = re.compile(r"quote\.ashx\?t=", re.IGNORECASE)
-        for anchor in soup.find_all("a", href=anchor_pattern):
-            text = anchor.get_text(strip=True).upper()
-            if re.fullmatch(r"[A-Z\.\-]{1,6}", text):
-                symbols.add(text)
-        table_cells = soup.select("td.screener-body-table-nw a.screener-link-primary")
-        for anchor in table_cells:
-            text = anchor.get_text(strip=True).upper()
-            if re.fullmatch(r"[A-Z\.\-]{1,6}", text):
-                symbols.add(text)
+
+        # Primary: pull only the ticker cell anchors (tab-link) from the screener grid.
+        grid_rows = soup.select("table.screener_table tr.styled-row, table.screener-view-table tr.styled-row")
+        for row in grid_rows:
+            ticker_cell = row.select_one("a.tab-link")
+            if ticker_cell:
+                text = ticker_cell.get_text(strip=True).upper()
+                if _is_valid_symbol(text):
+                    symbols.add(text)
+
+        # Fallback: if none found (HTML variant), try anchors inside screener tables but still require validity.
+        if not symbols:
+            screener_tables = soup.select("table.screener-view-table, table.screener-table")
+            for table in screener_tables:
+                for anchor in table.find_all("a", href=_ANCHOR_PATTERN):
+                    text = anchor.get_text(strip=True).upper()
+                    if _is_valid_symbol(text):
+                        symbols.add(text)
+
         parsed = sorted(symbols)
-        self.logger.debug("Parsed %d symbols from screener", len(parsed))
+        if not parsed:
+            self.logger.warning("Parsed 0 symbols from screener HTML")
+        else:
+            self.logger.debug("Parsed %d symbols from screener", len(parsed))
         return parsed
 
     def get_symbols(self, html: Optional[str] = None) -> List[str]:

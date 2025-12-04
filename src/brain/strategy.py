@@ -29,14 +29,16 @@ class Strategy:
         self,
         settings: Settings,
         screener: FinvizScreenerClient,
-        market_data: MarketDataProvider,
+        fill_data: MarketDataProvider,
+        buy_data: MarketDataProvider,
         broker: Broker,
         state_store: JsonStateStore,
         logger: logging.Logger | None = None,
     ) -> None:
         self.settings = settings
         self.screener = screener
-        self.market_data = market_data
+        self.fill_data = fill_data
+        self.buy_data = buy_data
         self.broker = broker
         self.state_store = state_store
         self.logger = logger or logging.getLogger(__name__)
@@ -45,38 +47,52 @@ class Strategy:
         screener_symbols = self.screener.get_symbols()
         positions = self.state_store.get_open_positions()
         open_order_symbols = {order.symbol for order in self.state_store.orders.values() if order.status in {OrderStatus.NEW, OrderStatus.WORKING}}
-
-        symbols_for_quotes: Set[str] = set(screener_symbols) | set(positions.keys()) | open_order_symbols
-        if not symbols_for_quotes:
-            self.logger.info("No symbols to process this tick.")
-            return
-
-        quotes = self.market_data.get_quotes(sorted(symbols_for_quotes))
-
-        # First process any outstanding orders (including sells) with current quotes.
-        fills = self.broker.simulate_minute(quotes)
-        self._process_fills(fills)
-
-        # Evaluate fresh buys after processing prior fills.
-        self._evaluate_new_buys(screener_symbols, quotes)
-
-        # Run simulation again to immediately fill newly placed market buys.
-        post_order_fills = self.broker.simulate_minute(quotes)
-        self._process_fills(post_order_fills)
-
-    def _evaluate_new_buys(self, screener_symbols: List[str], quotes: Dict[str, Quote]) -> None:
-        positions = self.state_store.get_open_positions()
         pending_buys = {
             order.symbol
             for order in self.state_store.orders.values()
             if order.side == OrderSide.BUY and order.status in {OrderStatus.NEW, OrderStatus.WORKING}
         }
+
+        # Quotes for filling open orders (limit sells) only.
+        symbols_for_fills: Set[str] = set(open_order_symbols)
+        fill_quotes: Dict[str, Quote] = {}
+        if symbols_for_fills:
+            fill_quotes = self.fill_data.get_quotes(sorted(symbols_for_fills))
+
+        fills = self.broker.simulate_minute(fill_quotes) if fill_quotes else []
+        self._process_fills(fills)
+
+        # Evaluate fresh buys after processing prior fills.
+        self._evaluate_new_buys(screener_symbols, pending_buys)
+
+        # After placing new buys, use buy_data quotes to fill them immediately.
+        # Note: reuse existing fill_quotes if available; otherwise fetch buy quotes for the new orders' symbols.
+        new_buy_symbols = {
+            order.symbol
+            for order in self.state_store.orders.values()
+            if order.side == OrderSide.BUY and order.status == OrderStatus.WORKING
+        }
+        if new_buy_symbols:
+            buy_quotes = self.buy_data.get_quotes(sorted(new_buy_symbols))
+            post_order_fills = self.broker.simulate_minute(buy_quotes)
+            self._process_fills(post_order_fills)
+
+    def _evaluate_new_buys(self, screener_symbols: List[str], pending_buys: Set[str]) -> None:
+        positions = self.state_store.get_open_positions()
+        buy_candidates = []
         for symbol in screener_symbols:
             if symbol in positions or symbol in pending_buys:
                 continue
-            quote = quotes.get(symbol)
+            buy_candidates.append(symbol)
+
+        if not buy_candidates:
+            return
+
+        buy_quotes = self.buy_data.get_quotes(buy_candidates)
+        for symbol in buy_candidates:
+            quote = buy_quotes.get(symbol)
             if not quote:
-                self.logger.debug("No quote for %s; skipping buy decision", symbol)
+                self.logger.debug("No buy quote for %s; skipping buy decision", symbol)
                 continue
             shares = max(1, math.ceil(self.settings.BASE_POSITION_DOLLARS / quote.last))
             order = Order(

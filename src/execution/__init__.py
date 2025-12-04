@@ -1,1 +1,1 @@
-"Execution" package containing broker abstractions and implementations.
+"""Execution package containing broker abstractions and implementations."""

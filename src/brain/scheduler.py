@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import datetime as dt
 from typing import Callable
 
 from .config import Settings
@@ -29,14 +30,25 @@ class MinuteScheduler:
                 self.settings.REGULAR_OPEN,
                 self.settings.REGULAR_CLOSE,
             ):
+                self.logger.info("Tick at %s", current)
                 try:
                     self.tick()
                 except Exception as exc:  # noqa: BLE001
                     self.logger.exception("Tick failed: %s", exc)
             else:
-                self.logger.debug("Outside trading hours; skipping tick.")
+                self.logger.info(
+                    "Outside trading hours; skipping tick at %s (window %s-%s %s)",
+                    current,
+                    self.settings.PREMARKET_START,
+                    self.settings.REGULAR_CLOSE,
+                    self.settings.TIMEZONE,
+                )
+            # Align to the next wall-clock minute boundary in the configured timezone.
+            current = now(self.settings.TIMEZONE)
+            next_minute = (current.replace(second=0, microsecond=0) + dt.timedelta(minutes=1))
+            sleep_seconds = max(1.0, (next_minute - current).total_seconds())
             try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=self.settings.REFRESH_INTERVAL_SECONDS)
+                await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_seconds)
             except asyncio.TimeoutError:
                 continue
 

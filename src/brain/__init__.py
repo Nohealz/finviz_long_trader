@@ -1,1 +1,1 @@
-"Brain" package containing strategy, state, Finviz client, scheduling, and orchestration.
+"""Brain package containing strategy, state, Finviz client, scheduling, and orchestration."""

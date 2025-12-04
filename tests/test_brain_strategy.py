@@ -35,7 +35,7 @@ def test_strategy_places_buys_and_targets(tmp_path):
     market_data = StubMarketData({"ABC": 50.0})
     broker = PaperBroker(market_data=market_data)
     store = JsonStateStore(state_file)
-    strategy = Strategy(settings, screener, market_data, broker, store)
+    strategy = Strategy(settings, screener, market_data, market_data, broker, store)
 
     strategy.run_tick()
 

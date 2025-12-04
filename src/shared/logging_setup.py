@@ -1,12 +1,12 @@
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
 
 def configure_logging(log_path: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:
     """
-    Configure application-wide logging with a rotating file handler and console output.
+    Configure application-wide logging with a daily rotating file handler and console output.
     """
     logger = logging.getLogger("finviz_trader")
     if logger.handlers:
@@ -21,7 +21,8 @@ def configure_logging(log_path: Optional[str] = None, level: int = logging.INFO)
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = RotatingFileHandler(file_path, maxBytes=1_000_000, backupCount=3)
+    # Rotate daily, keep all history (backupCount=0 means no deletion)
+    file_handler = TimedRotatingFileHandler(file_path, when="midnight", interval=1, backupCount=0, utc=False)
     file_handler.setFormatter(formatter)
     file_handler.setLevel(level)
 

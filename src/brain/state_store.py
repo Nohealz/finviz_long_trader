@@ -24,6 +24,7 @@ class JsonStateStore:
     def _load(self) -> None:
         if not self.path.exists():
             self.logger.info("State file not found, starting fresh: %s", self.path)
+            self._persist()  # create an empty state file so downstream code can read it
             return
         data = json.loads(self.path.read_text())
         self.positions = {sym: Position.model_validate(pos) for sym, pos in data.get("positions", {}).items()}

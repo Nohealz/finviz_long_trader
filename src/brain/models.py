@@ -34,7 +34,7 @@ class Quote(BaseModel):
     ask: float
     last: float
     mid: Optional[float] = None
-    timestamp: dt.datetime = Field(default_factory=dt.datetime.utcnow)
+    timestamp: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
 
     @model_validator(mode="after")
     def compute_mid(self) -> "Quote":
@@ -51,13 +51,13 @@ class Order(BaseModel):
     price: Optional[float] = None
     quantity: int
     status: OrderStatus = OrderStatus.NEW
-    created_at: dt.datetime = Field(default_factory=dt.datetime.utcnow)
-    updated_at: dt.datetime = Field(default_factory=dt.datetime.utcnow)
+    created_at: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
+    updated_at: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
     tags: List[str] = Field(default_factory=list)
 
     def mark_status(self, status: OrderStatus) -> None:
         self.status = status
-        self.updated_at = dt.datetime.utcnow()
+        self.updated_at = dt.datetime.now(dt.timezone.utc)
 
 
 class Fill(BaseModel):
@@ -66,7 +66,7 @@ class Fill(BaseModel):
     symbol: Symbol
     quantity: int
     price: float
-    timestamp: dt.datetime = Field(default_factory=dt.datetime.utcnow)
+    timestamp: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
 
 
 class Position(BaseModel):

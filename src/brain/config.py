@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings
+from pydantic import Field, ConfigDict
 
 
 class Settings(BaseSettings):
     """
     Central configuration for the brains service.
     """
+
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
     FINVIZ_URL: str = Field(
         "https://elite.finviz.com/screener.ashx?v=111&f=sh_curvol_o1000,ta_perf_d15o&ft=4&o=-change&ar=60",
@@ -30,6 +36,7 @@ class Settings(BaseSettings):
         description="Optional cookie string for Finviz Elite authentication.",
     )
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    FINNHUB_API_KEY: str | None = Field(
+        default=None,
+        description="Optional Finnhub API key for real-time quotes.",
+    )

@@ -8,7 +8,6 @@ logs/
 .data/
 venv/
 .env
-.env.*
 .DS_Store
 Thumbs.db
 .data/

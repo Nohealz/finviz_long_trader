@@ -35,7 +35,8 @@ class PaperBroker(Broker):
             if not quote:
                 continue
             if order.type == OrderType.MARKET:
-                price = quote.last * 1.001  # Approximate bar high for market buys
+                # Market buy: fill at ask if available, otherwise last.
+                price = quote.ask if quote.ask else quote.last
                 fills.append(
                     Fill(
                         order_id=order.id,

@@ -11,7 +11,7 @@ from src.brain.finviz_client import FinvizScreenerClient
 from src.brain.scheduler import MinuteScheduler
 from src.brain.state_store import JsonStateStore
 from src.brain.strategy import Strategy
-from src.execution.market_data_client import SyntheticMarketDataProvider
+from src.execution.market_data_client import SyntheticMarketDataProvider, FinnhubMarketDataProvider
 from src.execution.paper_broker import PaperBroker
 from src.shared.logging_setup import configure_logging
 
@@ -21,10 +21,15 @@ def build_services(logger: logging.Logger | None = None) -> MinuteScheduler:
     log_path = Path(settings.LOG_FILE)
     app_logger = logger or configure_logging(str(log_path))
     screener = FinvizScreenerClient(settings.FINVIZ_URL, cookie=settings.FINVIZ_COOKIE, logger=app_logger)
-    market_data = SyntheticMarketDataProvider(logger=app_logger)
+    if not settings.FINNHUB_API_KEY:
+        raise RuntimeError("FINNHUB_API_KEY is required for live quotes; synthetic data disabled.")
+
+    market_data = FinnhubMarketDataProvider(api_key=settings.FINNHUB_API_KEY, logger=app_logger)
+    app_logger.info("Using FinnhubMarketDataProvider for buy/fill quotes")
+
     broker = PaperBroker(market_data=market_data, logger=app_logger)
     state_store = JsonStateStore(settings.STATE_FILE, logger=app_logger)
-    strategy = Strategy(settings, screener, market_data, broker, state_store, logger=app_logger)
+    strategy = Strategy(settings, screener, market_data, market_data, broker, state_store, logger=app_logger)
     scheduler = MinuteScheduler(settings, tick=strategy.run_tick, logger=app_logger)
     return scheduler
 
