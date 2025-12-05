@@ -66,3 +66,9 @@ class JsonStateStore:
 
     def get_order(self, order_id: str) -> Optional[Order]:
         return self.orders.get(order_id)
+
+    def clear(self) -> None:
+        self.positions.clear()
+        self.orders.clear()
+        self.fills.clear()
+        self._persist()

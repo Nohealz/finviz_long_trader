@@ -19,6 +19,11 @@ class MinuteScheduler:
         self.tick = tick
         self.logger = logger or logging.getLogger(__name__)
         self._stop_event = asyncio.Event()
+        self._eod_callback: Callable[[], None] | None = None
+        self._eod_done_date: str | None = None
+
+    def set_eod_callback(self, fn: Callable[[], None]) -> None:
+        self._eod_callback = fn
 
     async def start(self) -> None:
         self.logger.info("Starting minute scheduler (interval=%ss)", self.settings.REFRESH_INTERVAL_SECONDS)
@@ -35,6 +40,13 @@ class MinuteScheduler:
                     self.tick()
                 except Exception as exc:  # noqa: BLE001
                     self.logger.exception("Tick failed: %s", exc)
+                # EOD after market close
+                if self._eod_callback and current.time() >= self.settings.REGULAR_CLOSE and (self._eod_done_date != current.date().isoformat()):
+                    try:
+                        self._eod_callback()
+                        self._eod_done_date = current.date().isoformat()
+                    except Exception as exc:  # noqa: BLE001
+                        self.logger.exception("EOD callback failed: %s", exc)
             else:
                 self.logger.info(
                     "Outside trading hours; skipping tick at %s (window %s-%s %s)",

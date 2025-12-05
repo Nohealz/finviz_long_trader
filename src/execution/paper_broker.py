@@ -35,8 +35,11 @@ class PaperBroker(Broker):
             if not quote:
                 continue
             if order.type == OrderType.MARKET:
-                # Market buy: fill at ask if available, otherwise last.
-                price = quote.ask if quote.ask else quote.last
+                # Market fill: buy at ask if available, sell at bid if available, otherwise last.
+                if order.side == OrderSide.SELL:
+                    price = quote.bid if quote.bid else quote.last
+                else:
+                    price = quote.ask if quote.ask else quote.last
                 fills.append(
                     Fill(
                         order_id=order.id,

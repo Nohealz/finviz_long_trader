@@ -87,6 +87,7 @@ class Position(BaseModel):
         self.total_shares += fill.quantity
         self.cash_invested += fill.price * fill.quantity
         self.avg_price = total_cost / self.total_shares if self.total_shares else 0.0
+        self.closed = False
 
     def apply_sell_fill(self, fill: Fill) -> None:
         self.total_shares -= fill.quantity

@@ -17,6 +17,7 @@ from .models import (
 )
 from .state_store import JsonStateStore
 from ..execution.broker_interface import Broker, MarketDataProvider
+from ..shared.time_utils import now
 
 
 class Strategy:
@@ -42,55 +43,44 @@ class Strategy:
         self.broker = broker
         self.state_store = state_store
         self.logger = logger or logging.getLogger(__name__)
+        self._eod_done_date: str | None = None
 
     def run_tick(self) -> None:
         screener_symbols = self.screener.get_symbols()
         positions = self.state_store.get_open_positions()
-        open_order_symbols = {order.symbol for order in self.state_store.orders.values() if order.status in {OrderStatus.NEW, OrderStatus.WORKING}}
         pending_buys = {
             order.symbol
             for order in self.state_store.orders.values()
             if order.side == OrderSide.BUY and order.status in {OrderStatus.NEW, OrderStatus.WORKING}
         }
 
-        # Quotes for filling open orders (limit sells) only.
-        symbols_for_fills: Set[str] = set(open_order_symbols)
-        fill_quotes: Dict[str, Quote] = {}
-        if symbols_for_fills:
-            fill_quotes = self.fill_data.get_quotes(sorted(symbols_for_fills))
+        buy_candidates = [sym for sym in screener_symbols if sym not in positions and sym not in pending_buys]
 
-        fills = self.broker.simulate_minute(fill_quotes) if fill_quotes else []
-        self._process_fills(fills)
-
-        # Evaluate fresh buys after processing prior fills.
-        self._evaluate_new_buys(screener_symbols, pending_buys)
-
-        # After placing new buys, use buy_data quotes to fill them immediately.
-        # Note: reuse existing fill_quotes if available; otherwise fetch buy quotes for the new orders' symbols.
-        new_buy_symbols = {
+        open_order_symbols = [
             order.symbol
             for order in self.state_store.orders.values()
-            if order.side == OrderSide.BUY and order.status == OrderStatus.WORKING
-        }
-        if new_buy_symbols:
-            buy_quotes = self.buy_data.get_quotes(sorted(new_buy_symbols))
-            post_order_fills = self.broker.simulate_minute(buy_quotes)
-            self._process_fills(post_order_fills)
+            if order.status in {OrderStatus.NEW, OrderStatus.WORKING}
+        ]
 
-    def _evaluate_new_buys(self, screener_symbols: List[str], pending_buys: Set[str]) -> None:
-        positions = self.state_store.get_open_positions()
-        buy_candidates = []
-        for symbol in screener_symbols:
-            if symbol in positions or symbol in pending_buys:
-                continue
-            buy_candidates.append(symbol)
-
-        if not buy_candidates:
+        symbols_to_quote = list(dict.fromkeys(buy_candidates + open_order_symbols))
+        if not symbols_to_quote:
             return
 
-        buy_quotes = self.buy_data.get_quotes(buy_candidates)
+        quotes = self.buy_data.get_quotes(symbols_to_quote)
+        if not quotes:
+            return
+
+        if buy_candidates:
+            self._place_buys(buy_candidates, quotes)
+
+        fills = self.broker.simulate_minute(quotes)
+        if fills:
+            self._process_fills(fills)
+
+    def _place_buys(self, buy_candidates: List[str], quotes: Dict[str, Quote]) -> None:
+        placed_symbols: Set[str] = set()
         for symbol in buy_candidates:
-            quote = buy_quotes.get(symbol)
+            quote = quotes.get(symbol)
             if not quote:
                 self.logger.debug("No buy quote for %s; skipping buy decision", symbol)
                 continue
@@ -106,6 +96,7 @@ class Strategy:
             placed = self.broker.place_order(order)
             self.state_store.upsert_order(placed)
             self.logger.info("Placed market buy for %s: %s shares", symbol, shares)
+            placed_symbols.add(symbol)
 
     def _process_fills(self, fills: List[Fill]) -> None:
         for fill in fills:
@@ -126,6 +117,7 @@ class Strategy:
         position = self.state_store.positions.get(order.symbol)
         if position:
             position.apply_buy_fill(fill)
+            position.closed = False
         else:
             position = Position(
                 symbol=order.symbol,
@@ -134,6 +126,7 @@ class Strategy:
                 cash_invested=fill.price * fill.quantity,
                 realized_pnl=0.0,
                 open_target_orders=[],
+                closed=False,
             )
         self._place_targets(position, fill.price, fill.quantity)
         self.state_store.upsert_position(position)
@@ -187,3 +180,54 @@ class Strategy:
                 qty,
                 price,
             )
+
+    def run_eod_liquidation(self) -> None:
+        """
+        End-of-day cleanup: cancel open targets, market-sell remaining shares, and optionally clear state.
+        """
+        today = now(self.settings.TIMEZONE).date().isoformat()
+        if self._eod_done_date == today:
+            return
+
+        self.logger.info("EOD liquidation started")
+
+        # Cancel open target orders
+        for order in list(self.state_store.orders.values()):
+            if order.side == OrderSide.SELL and order.status in {OrderStatus.NEW, OrderStatus.WORKING}:
+                order.mark_status(OrderStatus.CANCELLED)
+                self.state_store.upsert_order(order)
+
+        positions = self.state_store.get_open_positions()
+        symbols_to_sell = [sym for sym, pos in positions.items() if pos.total_shares > 0]
+        if symbols_to_sell:
+            quotes = self.buy_data.get_quotes(symbols_to_sell)
+            for sym, pos in positions.items():
+                if pos.total_shares <= 0:
+                    continue
+                qty = pos.total_shares
+                order = Order(
+                    symbol=sym,
+                    side=OrderSide.SELL,
+                    type=OrderType.MARKET,
+                    quantity=qty,
+                    status=OrderStatus.NEW,
+                    tags=["eod_liquidation"],
+                )
+                placed = self.broker.place_order(order)
+                self.state_store.upsert_order(placed)
+                fill_quotes = {sym: quotes.get(sym)} if quotes.get(sym) else {}
+                fills = self.broker.simulate_minute(fill_quotes)
+                self._process_fills(fills)
+
+        # Mark positions closed
+        for pos in positions.values():
+            pos.closed = True
+            pos.open_target_orders.clear()
+            pos.total_shares = 0
+            self.state_store.upsert_position(pos)
+
+        if self.settings.EOD_CLEAR_STATE:
+            self.state_store.clear()
+            self.logger.info("State cleared after EOD liquidation")
+
+        self._eod_done_date = today

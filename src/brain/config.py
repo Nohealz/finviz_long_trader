@@ -40,3 +40,20 @@ class Settings(BaseSettings):
         default=None,
         description="Optional Finnhub API key for real-time quotes.",
     )
+    FINNHUB_REQUEST_DELAY_MS: int = Field(
+        default=200,
+        description="Delay between Finnhub requests in milliseconds (rate limiting).",
+        ge=0,
+    )
+    FINNHUB_MAX_SYMBOLS_PER_MINUTE: int = Field(
+        default=30,
+        description="Max symbols to request per minute from Finnhub (rotated per tick).",
+        ge=1,
+    )
+    FINNHUB_MAX_SYMBOLS_PER_SECOND: int = Field(
+        default=5,
+        description="Max symbols to request per second from Finnhub.",
+        ge=1,
+    )
+    EOD_AUTO_LIQUIDATE: bool = True
+    EOD_CLEAR_STATE: bool = True

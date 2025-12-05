@@ -24,13 +24,20 @@ def build_services(logger: logging.Logger | None = None) -> MinuteScheduler:
     if not settings.FINNHUB_API_KEY:
         raise RuntimeError("FINNHUB_API_KEY is required for live quotes; synthetic data disabled.")
 
-    market_data = FinnhubMarketDataProvider(api_key=settings.FINNHUB_API_KEY, logger=app_logger)
+    market_data = FinnhubMarketDataProvider(
+        api_key=settings.FINNHUB_API_KEY,
+        logger=app_logger,
+        delay_ms=settings.FINNHUB_REQUEST_DELAY_MS,
+        max_symbols_per_minute=settings.FINNHUB_MAX_SYMBOLS_PER_MINUTE,
+        max_symbols_per_second=settings.FINNHUB_MAX_SYMBOLS_PER_SECOND,
+    )
     app_logger.info("Using FinnhubMarketDataProvider for buy/fill quotes")
 
     broker = PaperBroker(market_data=market_data, logger=app_logger)
     state_store = JsonStateStore(settings.STATE_FILE, logger=app_logger)
     strategy = Strategy(settings, screener, market_data, market_data, broker, state_store, logger=app_logger)
     scheduler = MinuteScheduler(settings, tick=strategy.run_tick, logger=app_logger)
+    scheduler.set_eod_callback(strategy.run_eod_liquidation)
     return scheduler
 
 
