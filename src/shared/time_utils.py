@@ -15,11 +15,14 @@ def is_within_trading_hours(
     premarket_start: dt.time,
     regular_open: dt.time,
     regular_close: dt.time,
+    allow_weekends: bool = False,
 ) -> bool:
     """
     Determine if current time is within premarket and regular session window.
     """
     if current is None:
+        return False
+    if not allow_weekends and current.weekday() >= 5:  # 5=Saturday, 6=Sunday
         return False
     current_time = current.time()
     return premarket_start <= current_time <= regular_close

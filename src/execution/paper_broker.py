@@ -27,7 +27,7 @@ class PaperBroker(Broker):
     def get_open_orders(self) -> List[Order]:
         return list(self.open_orders.values())
 
-    def simulate_minute(self, quotes: Dict[str, Quote]) -> List[Fill]:
+    def simulate_minute(self, quotes: Dict[str, Quote], use_high_for_limits: bool = False) -> List[Fill]:
         fills: List[Fill] = []
         to_remove: List[str] = []
         for order_id, order in list(self.open_orders.items()):
@@ -50,7 +50,12 @@ class PaperBroker(Broker):
                 )
                 to_remove.append(order_id)
             elif order.type == OrderType.LIMIT and order.side == OrderSide.SELL:
-                if quote.mid and order.price and quote.mid >= order.price:
+                target_hit = False
+                if use_high_for_limits and quote.high is not None and order.price is not None and quote.high >= order.price:
+                    target_hit = True
+                elif quote.mid and order.price and quote.mid >= order.price:
+                    target_hit = True
+                if target_hit:
                     fills.append(
                         Fill(
                             order_id=order.id,

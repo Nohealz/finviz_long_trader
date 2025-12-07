@@ -33,6 +33,7 @@ class Quote(BaseModel):
     bid: float
     ask: float
     last: float
+    high: float | None = None
     mid: Optional[float] = None
     timestamp: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
 

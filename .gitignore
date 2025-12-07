@@ -12,10 +12,9 @@ venv/
 Thumbs.db
 .data/
 data/state.json
-.idea/
-.vscode/
 pytest_cache/
 .mypy_cache/
 /build/
 /dist/
 *.egg-info/
+RUN_COMMANDS.md

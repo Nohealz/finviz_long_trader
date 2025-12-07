@@ -7,6 +7,10 @@ from typing import Dict, List, Optional
 from src.brain.models import Quote
 from src.execution.broker_interface import MarketDataProvider
 import requests
+try:
+    import yfinance as yf  # type: ignore
+except Exception:  # noqa: BLE001
+    yf = None
 
 
 class SyntheticMarketDataProvider(MarketDataProvider):
@@ -63,6 +67,7 @@ class FinnhubMarketDataProvider(MarketDataProvider):
         self._minute_key: int | None = None
         self._used_in_window = 0
         self._warned_window_start: float | None = None
+        self._last_trunc_warn_minute: int | None = None
         self._recent_requests: list[float] = []
 
     def _fetch_quote(self, symbol: str) -> Optional[Quote]:
@@ -78,10 +83,11 @@ class FinnhubMarketDataProvider(MarketDataProvider):
             bid = data.get("c") or 0.0
             ask = data.get("c") or 0.0
             last = data.get("c") or 0.0
+            high = data.get("h")
             if last == 0:
                 self.logger.warning("Finnhub returned zero quote for %s: %s", symbol, data)
                 return None
-            return Quote(symbol=symbol, bid=bid, ask=ask, last=last)
+            return Quote(symbol=symbol, bid=bid, ask=ask, last=last, high=high if high is not None else None)
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("Finnhub quote failed for %s: %s", symbol, exc)
             return None
@@ -132,11 +138,14 @@ class FinnhubMarketDataProvider(MarketDataProvider):
             else:
                 selected = unique_symbols[start:] + unique_symbols[: end - len(unique_symbols)]
             self._offset = (start + allowed) % len(unique_symbols)
-            self.logger.warning(
-                "Finnhub symbol list truncated to %d (of %d) this tick to respect rate limits.",
-                len(selected),
-                len(unique_symbols),
-            )
+            minute_key = int(time.time() // 60)
+            if self._last_trunc_warn_minute != minute_key:
+                self.logger.warning(
+                    "Finnhub symbol list truncated to %d (of %d) this tick to respect rate limits.",
+                    len(selected),
+                    len(unique_symbols),
+                )
+                self._last_trunc_warn_minute = minute_key
         else:
             selected = unique_symbols
 
@@ -154,3 +163,83 @@ class FinnhubMarketDataProvider(MarketDataProvider):
                 time.sleep(self.delay_ms / 1000.0)
         self.logger.debug("Fetched %d/%d quotes from Finnhub", len(quotes), len(selected))
         return quotes
+
+
+class YFinanceMarketDataProvider(MarketDataProvider):
+    """
+    5-minute OHLC-based quotes sourced from yfinance. Caches per-symbol for a
+    configurable TTL to avoid excessive network calls. Uses a custom session to
+    reduce 429s by setting a browser-y User-Agent.
+    """
+
+    def __init__(self, ttl_seconds: int = 300, logger: logging.Logger | None = None) -> None:
+        if yf is None:
+            raise ImportError("yfinance is required for YFinanceMarketDataProvider; please pip install yfinance")
+        self.logger = logger or logging.getLogger(__name__)
+        self.ttl_seconds = ttl_seconds
+        self._cache: dict[str, tuple[float, Quote]] = {}
+        self._session = requests.Session()
+        self._session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                "Accept": "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+        )
+
+    def _is_fresh(self, symbol: str) -> bool:
+        if symbol not in self._cache:
+            return False
+        ts, _ = self._cache[symbol]
+        return (time.time() - ts) < self.ttl_seconds
+
+    def _fetch_symbol(self, symbol: str) -> Optional[Quote]:
+        try:
+            data = yf.Ticker(symbol, session=self._session)
+            hist = data.history(period="1d", interval="5m")
+            if hist.empty:
+                return None
+            last_row = hist.iloc[-1]
+            high = float(last_row.get("High", 0.0))
+            close = float(last_row.get("Close", 0.0))
+            if close == 0.0:
+                return None
+            quote = Quote(symbol=symbol, bid=close, ask=close, last=close, mid=close, high=high)
+            return quote
+        except Exception as exc:  # noqa: BLE001
+            # Suppress noisy repeats; log at debug to avoid spamming.
+            self.logger.debug("yfinance quote failed for %s: %s", symbol, exc)
+            return None
+
+    def get_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
+        quotes: Dict[str, Quote] = {}
+        unique_symbols = list(dict.fromkeys(symbols))
+        for sym in unique_symbols:
+            if self._is_fresh(sym):
+                quotes[sym] = self._cache[sym][1]
+                continue
+            q = self._fetch_symbol(sym)
+            if q:
+                quotes[sym] = q
+                self._cache[sym] = (time.time(), q)
+        return quotes
+
+
+class CompositeMarketDataProvider(MarketDataProvider):
+    """
+    Chain providers in order. First provider to return a quote wins for each symbol.
+    Helpful for falling back to Finnhub when yfinance is missing data.
+    """
+
+    def __init__(self, providers: List[MarketDataProvider]) -> None:
+        self.providers = providers
+
+    def get_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
+        remaining = list(dict.fromkeys(symbols))
+        combined: Dict[str, Quote] = {}
+        for provider in self.providers:
+            if not remaining:
+                break
+            partial = provider.get_quotes(remaining)
+            combined.update(partial)
+            remaining = [s for s in remaining if s not in combined]
+        return combined

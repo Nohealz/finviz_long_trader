@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     REGULAR_OPEN: dt.time = dt.time(hour=9, minute=30)
     REGULAR_CLOSE: dt.time = dt.time(hour=16, minute=0)
     TIMEZONE: str = "America/New_York"
+    ALLOW_WEEKEND_TRADING: bool = False
 
     STATE_FILE: Path = Path("./data/state.json")
     LOG_FILE: Path = Path("./logs/finviz_trader.log")
@@ -55,5 +56,11 @@ class Settings(BaseSettings):
         description="Max symbols to request per second from Finnhub.",
         ge=1,
     )
+    YFINANCE_CACHE_TTL_SECONDS: int = Field(
+        default=300,
+        description="How long to cache yfinance 5m bars (seconds).",
+        ge=60,
+    )
+    PNL_LOG_FILE: Path = Path("./data/pnl.log")
     EOD_AUTO_LIQUIDATE: bool = True
     EOD_CLEAR_STATE: bool = True

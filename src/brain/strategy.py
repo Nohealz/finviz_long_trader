@@ -18,6 +18,7 @@ from .models import (
 from .state_store import JsonStateStore
 from ..execution.broker_interface import Broker, MarketDataProvider
 from ..shared.time_utils import now
+from ..shared.pnl_logger import PnLLogger
 
 
 class Strategy:
@@ -43,6 +44,7 @@ class Strategy:
         self.broker = broker
         self.state_store = state_store
         self.logger = logger or logging.getLogger(__name__)
+        self.pnl_logger = PnLLogger(settings.PNL_LOG_FILE, logger=self.logger)
         self._eod_done_date: str | None = None
 
     def run_tick(self) -> None:
@@ -62,22 +64,30 @@ class Strategy:
             if order.status in {OrderStatus.NEW, OrderStatus.WORKING}
         ]
 
-        symbols_to_quote = list(dict.fromkeys(buy_candidates + open_order_symbols))
-        if not symbols_to_quote:
-            return
-
-        quotes = self.buy_data.get_quotes(symbols_to_quote)
-        if not quotes:
-            return
-
+        buy_quotes: Dict[str, Quote] = {}
+        placed_symbols: Set[str] = set()
         if buy_candidates:
-            self._place_buys(buy_candidates, quotes)
+            buy_quotes = self.buy_data.get_quotes(buy_candidates)
+            placed_symbols = self._place_buys(buy_candidates, buy_quotes)
 
-        fills = self.broker.simulate_minute(quotes)
+        fill_quotes: Dict[str, Quote] = {}
+        if open_order_symbols:
+            fill_quotes = self.fill_data.get_quotes(open_order_symbols)
+
+        combined_quotes = dict(fill_quotes)
+        combined_quotes.update({sym: buy_quotes[sym] for sym in placed_symbols if sym in buy_quotes})
+
+        if not combined_quotes:
+            return
+
+        current = now(self.settings.TIMEZONE)
+        # Use high-of-day for limit sells even premarket so we catch fills on HOD moves.
+        use_high_for_limits = True
+        fills = self.broker.simulate_minute(combined_quotes, use_high_for_limits=use_high_for_limits)
         if fills:
             self._process_fills(fills)
 
-    def _place_buys(self, buy_candidates: List[str], quotes: Dict[str, Quote]) -> None:
+    def _place_buys(self, buy_candidates: List[str], quotes: Dict[str, Quote]) -> Set[str]:
         placed_symbols: Set[str] = set()
         for symbol in buy_candidates:
             quote = quotes.get(symbol)
@@ -97,6 +107,7 @@ class Strategy:
             self.state_store.upsert_order(placed)
             self.logger.info("Placed market buy for %s: %s shares", symbol, shares)
             placed_symbols.add(symbol)
+        return placed_symbols
 
     def _process_fills(self, fills: List[Fill]) -> None:
         for fill in fills:
@@ -130,18 +141,23 @@ class Strategy:
             )
         self._place_targets(position, fill.price, fill.quantity)
         self.state_store.upsert_position(position)
+        self.pnl_logger.log_entry(order.symbol, fill.timestamp, fill.price, fill.quantity, order.id)
 
     def _handle_sell_fill(self, order: Order, fill: Fill) -> None:
         position = self.state_store.positions.get(order.symbol)
         if not position:
             self.logger.warning("Sell fill for %s with no tracked position", order.symbol)
             return
+        avg_before = position.avg_price
         position.apply_sell_fill(fill)
         if order.id in position.open_target_orders:
             position.open_target_orders.remove(order.id)
+        pnl_delta = (fill.price - avg_before) * fill.quantity
+        self.pnl_logger.log_exit_fill(order.symbol, fill.timestamp, fill.price, fill.quantity, pnl_delta, order.id)
         if position.closed:
             position.open_target_orders.clear()
             self.logger.info("Position %s fully closed; realized PnL %.2f", position.symbol, position.realized_pnl)
+            self.pnl_logger.log_close_summary(position.symbol, fill.timestamp, position.realized_pnl)
         self.state_store.upsert_position(position)
 
     def _place_targets(self, position: Position, entry_price: float, total_shares: int) -> None:

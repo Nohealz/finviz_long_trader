@@ -34,19 +34,13 @@ class MinuteScheduler:
                 self.settings.PREMARKET_START,
                 self.settings.REGULAR_OPEN,
                 self.settings.REGULAR_CLOSE,
+                allow_weekends=self.settings.ALLOW_WEEKEND_TRADING,
             ):
                 self.logger.info("Tick at %s", current)
                 try:
                     self.tick()
                 except Exception as exc:  # noqa: BLE001
                     self.logger.exception("Tick failed: %s", exc)
-                # EOD after market close
-                if self._eod_callback and current.time() >= self.settings.REGULAR_CLOSE and (self._eod_done_date != current.date().isoformat()):
-                    try:
-                        self._eod_callback()
-                        self._eod_done_date = current.date().isoformat()
-                    except Exception as exc:  # noqa: BLE001
-                        self.logger.exception("EOD callback failed: %s", exc)
             else:
                 self.logger.info(
                     "Outside trading hours; skipping tick at %s (window %s-%s %s)",
@@ -55,6 +49,17 @@ class MinuteScheduler:
                     self.settings.REGULAR_CLOSE,
                     self.settings.TIMEZONE,
                 )
+                # If we are past the regular close and haven't run EOD yet, run it once here.
+                if (
+                    self._eod_callback
+                    and current.time() >= self.settings.REGULAR_CLOSE
+                    and self._eod_done_date != current.date().isoformat()
+                ):
+                    try:
+                        self._eod_callback()
+                        self._eod_done_date = current.date().isoformat()
+                    except Exception as exc:  # noqa: BLE001
+                        self.logger.exception("EOD callback failed: %s", exc)
             # Align to the next wall-clock minute boundary in the configured timezone.
             current = now(self.settings.TIMEZONE)
             next_minute = (current.replace(second=0, microsecond=0) + dt.timedelta(minutes=1))

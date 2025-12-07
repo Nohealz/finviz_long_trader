@@ -22,7 +22,7 @@ class Broker(ABC):
         ...
 
     @abstractmethod
-    def simulate_minute(self, quotes: Dict[str, Quote]) -> List[Fill]:
+    def simulate_minute(self, quotes: Dict[str, Quote], use_high_for_limits: bool = False) -> List[Fill]:
         """
         Advance the simulation by one 'minute' of market data, determining
         which orders are filled based on the provided quotes.
