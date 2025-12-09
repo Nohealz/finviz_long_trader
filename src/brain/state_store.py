@@ -19,6 +19,8 @@ class JsonStateStore:
         self.positions: Dict[str, Position] = {}
         self.orders: Dict[str, Order] = {}
         self.fills: Dict[str, Fill] = {}
+        # Map of symbol -> last traded ISO date to enforce per-day buy limits.
+        self.traded_dates: Dict[str, str] = {}
         self._load()
 
     def _load(self) -> None:
@@ -30,6 +32,7 @@ class JsonStateStore:
         self.positions = {sym: Position.model_validate(pos) for sym, pos in data.get("positions", {}).items()}
         self.orders = {oid: Order.model_validate(ord_) for oid, ord_ in data.get("orders", {}).items()}
         self.fills = {fid: Fill.model_validate(fill) for fid, fill in data.get("fills", {}).items()}
+        self.traded_dates = data.get("traded_dates", {})
         self.logger.info(
             "Loaded state: %d positions, %d orders, %d fills",
             len(self.positions),
@@ -43,6 +46,7 @@ class JsonStateStore:
             "positions": {sym: pos.model_dump(mode="json") for sym, pos in self.positions.items()},
             "orders": {oid: order.model_dump(mode="json") for oid, order in self.orders.items()},
             "fills": {fid: fill.model_dump(mode="json") for fid, fill in self.fills.items()},
+            "traded_dates": self.traded_dates,
         }
         self.path.write_text(json.dumps(payload, indent=2))
 
@@ -71,4 +75,13 @@ class JsonStateStore:
         self.positions.clear()
         self.orders.clear()
         self.fills.clear()
+        self.traded_dates.clear()
         self._persist()
+
+    def mark_traded(self, symbol: str, iso_date: str) -> None:
+        """Remember that a symbol traded on a given date (used to block re-entries)."""
+        self.traded_dates[symbol] = iso_date
+        self._persist()
+
+    def traded_on_date(self, symbol: str, iso_date: str) -> bool:
+        return self.traded_dates.get(symbol) == iso_date

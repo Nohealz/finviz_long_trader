@@ -72,25 +72,33 @@ class FinnhubMarketDataProvider(MarketDataProvider):
 
     def _fetch_quote(self, symbol: str) -> Optional[Quote]:
         url = f"{self.base_url}/quote"
-        try:
-            resp = self.session.get(url, params={"symbol": symbol, "token": self.api_key}, timeout=10)
-            if resp.status_code == 429:
-                self.logger.warning("Finnhub rate limit hit for %s; status %s", symbol, resp.status_code)
+        for attempt in range(3):
+            try:
+                resp = self.session.get(url, params={"symbol": symbol, "token": self.api_key}, timeout=10)
+                if resp.status_code == 429:
+                    self.logger.warning("Finnhub rate limit hit for %s; status %s", symbol, resp.status_code)
+                    return None
+                if resp.status_code >= 500:
+                    if attempt < 2:
+                        time.sleep(0.5)
+                        continue
+                resp.raise_for_status()
+                data = resp.json()
+                # Finnhub fields: c=current, h=high, l=low, o=open, pc=prev close, t=timestamp, dp/per change fields may exist
+                bid = data.get("c") or 0.0
+                ask = data.get("c") or 0.0
+                last = data.get("c") or 0.0
+                high = data.get("h")
+                if last == 0:
+                    self.logger.warning("Finnhub returned zero quote for %s: %s", symbol, data)
+                    return None
+                return Quote(symbol=symbol, bid=bid, ask=ask, last=last, high=high if high is not None else None)
+            except Exception as exc:  # noqa: BLE001
+                if attempt < 2:
+                    time.sleep(0.5)
+                    continue
+                self.logger.warning("Finnhub quote failed for %s: %s", symbol, exc)
                 return None
-            resp.raise_for_status()
-            data = resp.json()
-            # Finnhub fields: c=current, h=high, l=low, o=open, pc=prev close, t=timestamp, dp/per change fields may exist
-            bid = data.get("c") or 0.0
-            ask = data.get("c") or 0.0
-            last = data.get("c") or 0.0
-            high = data.get("h")
-            if last == 0:
-                self.logger.warning("Finnhub returned zero quote for %s: %s", symbol, data)
-                return None
-            return Quote(symbol=symbol, bid=bid, ask=ask, last=last, high=high if high is not None else None)
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning("Finnhub quote failed for %s: %s", symbol, exc)
-            return None
 
     def _respect_rate_limits(self, allow: int) -> int:
         now_ts = time.time()

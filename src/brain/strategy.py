@@ -50,13 +50,25 @@ class Strategy:
     def run_tick(self) -> None:
         screener_symbols = self.screener.get_symbols()
         positions = self.state_store.get_open_positions()
+        all_positions = self.state_store.positions
         pending_buys = {
             order.symbol
             for order in self.state_store.orders.values()
             if order.side == OrderSide.BUY and order.status in {OrderStatus.NEW, OrderStatus.WORKING}
         }
 
-        buy_candidates = [sym for sym in screener_symbols if sym not in positions and sym not in pending_buys]
+        today = now(self.settings.TIMEZONE).date().isoformat()
+        traded_today = {sym for sym, pos in all_positions.items() if pos.last_entry_date == today}
+        # Also respect traded_dates map to block re-entries even after full close.
+        for sym in set(self.state_store.traded_dates.keys()):
+            if self.state_store.traded_dates.get(sym) == today:
+                traded_today.add(sym)
+
+        buy_candidates = [
+            sym
+            for sym in screener_symbols
+            if sym not in positions and sym not in pending_buys and sym not in traded_today
+        ]
 
         open_order_symbols = [
             order.symbol
@@ -81,8 +93,8 @@ class Strategy:
             return
 
         current = now(self.settings.TIMEZONE)
-        # Use high-of-day for limit sells even premarket so we catch fills on HOD moves.
-        use_high_for_limits = True
+        # Only use high-of-day for limit sells during regular hours.
+        use_high_for_limits = current.time() >= self.settings.REGULAR_OPEN
         fills = self.broker.simulate_minute(combined_quotes, use_high_for_limits=use_high_for_limits)
         if fills:
             self._process_fills(fills)
@@ -139,8 +151,10 @@ class Strategy:
                 open_target_orders=[],
                 closed=False,
             )
+        position.last_entry_date = now(self.settings.TIMEZONE).date().isoformat()
         self._place_targets(position, fill.price, fill.quantity)
         self.state_store.upsert_position(position)
+        self.state_store.mark_traded(position.symbol, position.last_entry_date)
         self.pnl_logger.log_entry(order.symbol, fill.timestamp, fill.price, fill.quantity, order.id)
 
     def _handle_sell_fill(self, order: Order, fill: Fill) -> None:

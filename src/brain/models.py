@@ -78,6 +78,7 @@ class Position(BaseModel):
     realized_pnl: float = 0.0
     open_target_orders: List[str] = Field(default_factory=list)
     closed: bool = False
+    last_entry_date: Optional[str] = None  # ISO date string of last buy entry
 
     def apply_buy_fill(self, fill: Fill) -> None:
         """
