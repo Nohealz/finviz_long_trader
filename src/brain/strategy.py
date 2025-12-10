@@ -5,6 +5,8 @@ import math
 from typing import Dict, List, Set
 
 from .config import Settings
+from pathlib import Path
+
 from .finviz_client import FinvizScreenerClient
 from .models import (
     Fill,
@@ -19,6 +21,7 @@ from .state_store import JsonStateStore
 from ..execution.broker_interface import Broker, MarketDataProvider
 from ..shared.time_utils import now
 from ..shared.pnl_logger import PnLLogger
+from ..tools.pnl_summary import summarise_and_write
 
 
 class Strategy:
@@ -261,3 +264,29 @@ class Strategy:
             self.logger.info("State cleared after EOD liquidation")
 
         self._eod_done_date = today
+
+        # Generate PnL summary log for the day when state is cleared.
+        try:
+            base_pnl = Path(self.settings.PNL_LOG_FILE).expanduser()
+            dated_pnl = base_pnl.parent / f"pnl-{today}.log"
+
+            # Prefer today's dated file; fall back to base file if present and non-empty.
+            candidates = []
+            if dated_pnl.exists() and dated_pnl.stat().st_size > 0:
+                candidates.append(dated_pnl)
+            if base_pnl.exists() and base_pnl.stat().st_size > 0:
+                candidates.append(base_pnl)
+            if not candidates:
+                # As a last resort, scan for any pnl-<today>.log variants in the data dir.
+                for p in base_pnl.parent.glob(f"pnl-{today}*.log"):
+                    if p.stat().st_size > 0:
+                        candidates.append(p)
+
+            if candidates:
+                pnl_path = sorted(candidates)[0]
+                output, out_file = summarise_and_write(pnl_path)
+                self.logger.info("PnL summary written to %s", out_file)
+            else:
+                self.logger.warning("PnL log for %s not found or empty; skipping summary generation", today)
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.error("Failed to generate PnL summary: %s", exc)

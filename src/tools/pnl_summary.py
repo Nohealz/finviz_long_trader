@@ -12,7 +12,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 
 @dataclass
@@ -68,19 +68,7 @@ def summarise(file_path: Path) -> Dict[str, SymbolStats]:
     return stats
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Summarize a PnL JSONL log.")
-    parser.add_argument("--file", required=True, help="Path to pnl-YYYY-MM-DD.log")
-    parser.add_argument(
-        "--out",
-        help="Optional path to write a text summary log. Default: data/pnl-summary-<date>.log next to the PnL file.",
-    )
-    args = parser.parse_args()
-
-    file_path = Path(args.file)
-    if not file_path.exists():
-        raise SystemExit(f"File not found: {file_path}")
-
+def summarise_and_write(file_path: Path, out_path: Optional[Path] = None) -> Tuple[str, Optional[Path]]:
     stats = summarise(file_path)
     total_realized = sum(rec.realized for rec in stats.values())
     wins = [rec.realized for rec in stats.values() if rec.realized > 0]
@@ -111,18 +99,36 @@ def main() -> None:
         )
 
     output = "\n".join(lines)
-    print(output)
 
-    # Write to a dated summary log if requested or by default.
-    out_path: Path
-    if args.out:
-        out_path = Path(args.out)
-    else:
+    if out_path is None:
         out_dir = file_path.parent
         out_name = f"pnl-summary-{file_path.stem.replace('pnl-', '')}.log"
         out_path = out_dir / out_name
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(output + "\n")
+
+    if out_path:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(output + "\n")
+
+    return output, out_path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Summarize a PnL JSONL log.")
+    parser.add_argument("--file", required=True, help="Path to pnl-YYYY-MM-DD.log")
+    parser.add_argument(
+        "--out",
+        help="Optional path to write a text summary log. Default: data/pnl-summary-<date>.log next to the PnL file.",
+    )
+    args = parser.parse_args()
+
+    file_path = Path(args.file)
+    if not file_path.exists():
+        raise SystemExit(f"File not found: {file_path}")
+
+    output, out_path = summarise_and_write(file_path, Path(args.out) if args.out else None)
+    print(output)
+    if out_path:
+        print(f"Summary written to: {out_path}")
 
 
 if __name__ == "__main__":
