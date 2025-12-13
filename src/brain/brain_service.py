@@ -16,6 +16,7 @@ from src.execution.market_data_client import (
     FinnhubMarketDataProvider,
 )
 from src.execution.paper_broker import PaperBroker
+from src.execution.alpaca_broker import AlpacaBroker, AlpacaClient, AlpacaMarketDataProvider
 from src.shared.logging_setup import configure_logging
 
 
@@ -34,10 +35,27 @@ def build_services(logger: logging.Logger | None = None) -> MinuteScheduler:
         max_symbols_per_minute=settings.FINNHUB_MAX_SYMBOLS_PER_MINUTE,
         max_symbols_per_second=settings.FINNHUB_MAX_SYMBOLS_PER_SECOND,
     )
-    fill_data = buy_data  # Use Finnhub for fills; broker will use bid/ask pre-open and high after open
-    app_logger.info("Using FinnhubMarketDataProvider for buys and fills")
+    fill_data = buy_data
 
-    broker = PaperBroker(market_data=fill_data, logger=app_logger)
+    if settings.BROKER_BACKEND.lower() == "alpaca":
+        if not settings.ALPACA_API_KEY or not settings.ALPACA_API_SECRET:
+            raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET are required for Alpaca backend.")
+        alpaca_client = AlpacaClient(
+            api_key=settings.ALPACA_API_KEY,
+            api_secret=settings.ALPACA_API_SECRET,
+            base_url=settings.ALPACA_API_BASE_URL,
+            data_url=settings.ALPACA_DATA_BASE_URL,
+            logger=app_logger,
+        )
+        fill_data = AlpacaMarketDataProvider(alpaca_client, logger=app_logger)
+        buy_data = fill_data
+        broker = AlpacaBroker(alpaca_client, logger=app_logger)
+        app_logger.info("Using AlpacaBroker backend (paper)")
+    else:
+        broker = PaperBroker(market_data=fill_data, logger=app_logger)
+        app_logger.info("Using PaperBroker backend")
+        app_logger.info("Using FinnhubMarketDataProvider for buys and fills")
+
     state_store = JsonStateStore(settings.STATE_FILE, logger=app_logger)
     strategy = Strategy(settings, screener, fill_data, buy_data, broker, state_store, logger=app_logger)
     scheduler = MinuteScheduler(settings, tick=strategy.run_tick, logger=app_logger)

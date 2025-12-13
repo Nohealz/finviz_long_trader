@@ -25,6 +25,9 @@ pip install -r requirements.txt
 ```
 python -m src.brain.brain_service
 ```
+5) Broker backend selection:
+   - Default: in-memory paper broker (no external calls).
+   - Alpaca paper: set `BROKER_BACKEND=alpaca` and provide `ALPACA_API_KEY`, `ALPACA_API_SECRET`. Optional overrides: `ALPACA_API_BASE_URL` (paper endpoint by default) and `ALPACA_DATA_BASE_URL`. Extended-hours flag is enabled on all orders.
 5) Run tests:
 ```
 pytest

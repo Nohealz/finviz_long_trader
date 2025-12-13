@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     REGULAR_CLOSE: dt.time = dt.time(hour=16, minute=0)
     TIMEZONE: str = "America/New_York"
     ALLOW_WEEKEND_TRADING: bool = False
+    BROKER_BACKEND: str = Field(default="paper", description="Which broker backend to use: paper or alpaca.")
 
     STATE_FILE: Path = Path("./data/state.json")
     LOG_FILE: Path = Path("./logs/finviz_trader.log")
@@ -64,3 +65,9 @@ class Settings(BaseSettings):
     PNL_LOG_FILE: Path = Path("./data/pnl.log")
     EOD_AUTO_LIQUIDATE: bool = True
     EOD_CLEAR_STATE: bool = True
+
+    # Alpaca configuration
+    ALPACA_API_KEY: str | None = None
+    ALPACA_API_SECRET: str | None = None
+    ALPACA_API_BASE_URL: str = "https://paper-api.alpaca.markets"
+    ALPACA_DATA_BASE_URL: str = "https://data.alpaca.markets"
