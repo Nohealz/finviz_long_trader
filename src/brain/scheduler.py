@@ -54,6 +54,7 @@ class MinuteScheduler:
                     self._eod_callback
                     and current.time() >= self.settings.REGULAR_CLOSE
                     and self._eod_done_date != current.date().isoformat()
+                    and (self.settings.ALLOW_WEEKEND_TRADING or current.weekday() < 5)
                 ):
                     try:
                         self._eod_callback()

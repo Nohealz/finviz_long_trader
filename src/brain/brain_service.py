@@ -16,7 +16,7 @@ from src.execution.market_data_client import (
     FinnhubMarketDataProvider,
 )
 from src.execution.paper_broker import PaperBroker
-from src.execution.alpaca_broker import AlpacaBroker, AlpacaClient, AlpacaMarketDataProvider
+from src.execution.alpaca_broker import AlpacaBroker, AlpacaMarketDataProvider
 from src.shared.logging_setup import configure_logging
 
 
@@ -25,33 +25,35 @@ def build_services(logger: logging.Logger | None = None) -> MinuteScheduler:
     log_path = Path(settings.LOG_FILE)
     app_logger = logger or configure_logging(str(log_path))
     screener = FinvizScreenerClient(settings.FINVIZ_URL, cookie=settings.FINVIZ_COOKIE, logger=app_logger)
-    if not settings.FINNHUB_API_KEY:
-        raise RuntimeError("FINNHUB_API_KEY is required for live quotes; synthetic data disabled.")
-
-    buy_data = FinnhubMarketDataProvider(
-        api_key=settings.FINNHUB_API_KEY,
-        logger=app_logger,
-        delay_ms=settings.FINNHUB_REQUEST_DELAY_MS,
-        max_symbols_per_minute=settings.FINNHUB_MAX_SYMBOLS_PER_MINUTE,
-        max_symbols_per_second=settings.FINNHUB_MAX_SYMBOLS_PER_SECOND,
-    )
-    fill_data = buy_data
-
     if settings.BROKER_BACKEND.lower() == "alpaca":
         if not settings.ALPACA_API_KEY or not settings.ALPACA_API_SECRET:
             raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET are required for Alpaca backend.")
-        alpaca_client = AlpacaClient(
+        buy_data = AlpacaMarketDataProvider(
+            api_key=settings.ALPACA_API_KEY,
+            api_secret=settings.ALPACA_API_SECRET,
+            data_url=settings.ALPACA_DATA_BASE_URL,
+            logger=app_logger,
+        )
+        fill_data = buy_data
+        broker = AlpacaBroker(
             api_key=settings.ALPACA_API_KEY,
             api_secret=settings.ALPACA_API_SECRET,
             base_url=settings.ALPACA_API_BASE_URL,
             data_url=settings.ALPACA_DATA_BASE_URL,
             logger=app_logger,
         )
-        fill_data = AlpacaMarketDataProvider(alpaca_client, logger=app_logger)
-        buy_data = fill_data
-        broker = AlpacaBroker(alpaca_client, logger=app_logger)
         app_logger.info("Using AlpacaBroker backend (paper)")
     else:
+        if not settings.FINNHUB_API_KEY:
+            raise RuntimeError("FINNHUB_API_KEY is required for live quotes; synthetic data disabled.")
+        buy_data = FinnhubMarketDataProvider(
+            api_key=settings.FINNHUB_API_KEY,
+            logger=app_logger,
+            delay_ms=settings.FINNHUB_REQUEST_DELAY_MS,
+            max_symbols_per_minute=settings.FINNHUB_MAX_SYMBOLS_PER_MINUTE,
+            max_symbols_per_second=settings.FINNHUB_MAX_SYMBOLS_PER_SECOND,
+        )
+        fill_data = buy_data
         broker = PaperBroker(market_data=fill_data, logger=app_logger)
         app_logger.info("Using PaperBroker backend")
         app_logger.info("Using FinnhubMarketDataProvider for buys and fills")

@@ -21,6 +21,10 @@ class JsonStateStore:
         self.fills: Dict[str, Fill] = {}
         # Map of symbol -> last traded ISO date to enforce per-day buy limits.
         self.traded_dates: Dict[str, str] = {}
+        # Track processed fill IDs (e.g., from Alpaca activities) to avoid double counting across restarts.
+        self.processed_fill_ids: set[str] = set()
+        # Simple metrics store (e.g., max holdings value per day).
+        self.metrics: Dict[str, object] = {}
         self._load()
 
     def _load(self) -> None:
@@ -29,24 +33,21 @@ class JsonStateStore:
             self._persist()  # create an empty state file so downstream code can read it
             return
         data = json.loads(self.path.read_text())
-        self.positions = {sym: Position.model_validate(pos) for sym, pos in data.get("positions", {}).items()}
-        self.orders = {oid: Order.model_validate(ord_) for oid, ord_ in data.get("orders", {}).items()}
-        self.fills = {fid: Fill.model_validate(fill) for fid, fill in data.get("fills", {}).items()}
+        # Positions/orders/fills are always sourced from the broker; we do not reload them from disk.
+        self.positions = {}
+        self.orders = {}
+        self.fills = {}
         self.traded_dates = data.get("traded_dates", {})
-        self.logger.info(
-            "Loaded state: %d positions, %d orders, %d fills",
-            len(self.positions),
-            len(self.orders),
-            len(self.fills),
-        )
+        self.processed_fill_ids = set(data.get("processed_fill_ids", []))
+        self.metrics = data.get("metrics", {}) or {}
+        self.logger.info("Loaded state (positions/orders pulled from broker at runtime)")
 
     def _persist(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "positions": {sym: pos.model_dump(mode="json") for sym, pos in self.positions.items()},
-            "orders": {oid: order.model_dump(mode="json") for oid, order in self.orders.items()},
-            "fills": {fid: fill.model_dump(mode="json") for fid, fill in self.fills.items()},
             "traded_dates": self.traded_dates,
+            "processed_fill_ids": sorted(self.processed_fill_ids),
+            "metrics": self.metrics,
         }
         self.path.write_text(json.dumps(payload, indent=2))
 
@@ -76,6 +77,8 @@ class JsonStateStore:
         self.orders.clear()
         self.fills.clear()
         self.traded_dates.clear()
+        self.processed_fill_ids.clear()
+        self.metrics.clear()
         self._persist()
 
     def mark_traded(self, symbol: str, iso_date: str) -> None:
@@ -85,3 +88,61 @@ class JsonStateStore:
 
     def traded_on_date(self, symbol: str, iso_date: str) -> bool:
         return self.traded_dates.get(symbol) == iso_date
+
+    def record_processed_fill_id(self, fill_id: str) -> None:
+        self.processed_fill_ids.add(fill_id)
+        self._persist()
+
+    def is_fill_processed(self, fill_id: str) -> bool:
+        return fill_id in self.processed_fill_ids
+
+    def record_holdings_value(self, value: float, iso_date: str) -> float:
+        """
+        Track max holdings value per day. Returns the current max for the day.
+        """
+        max_date = self.metrics.get("max_holdings_date")
+        if max_date != iso_date:
+            # New day: reset max.
+            self.metrics["max_holdings_value"] = 0.0
+            self.metrics["max_holdings_date"] = iso_date
+        current_max = float(self.metrics.get("max_holdings_value", 0.0) or 0.0)
+        if value > current_max:
+            self.metrics["max_holdings_value"] = value
+            self.metrics["max_holdings_date"] = iso_date
+            self._persist()
+            return value
+        return current_max
+
+    def record_invested_value(self, value: float, iso_date: str) -> tuple[float, bool]:
+        """
+        Track max invested capital (cost basis of open positions) per day.
+        Returns (current_max, updated_flag).
+        """
+        max_date = self.metrics.get("max_invested_date")
+        if max_date != iso_date:
+            self.metrics["max_invested_value"] = 0.0
+            self.metrics["max_invested_date"] = iso_date
+        current_max = float(self.metrics.get("max_invested_value", 0.0) or 0.0)
+        updated = False
+        if value > current_max:
+            self.metrics["max_invested_value"] = value
+            self.metrics["max_invested_date"] = iso_date
+            self._persist()
+            return value, True
+        return current_max, updated
+
+    def get_last_sync_timestamp(self) -> str | None:
+        """Return the last broker sync timestamp (ISO) if set."""
+        return self.metrics.get("alpaca_last_sync")  # type: ignore[return-value]
+
+    def record_sync_timestamp(self, iso_ts: str) -> None:
+        """Record the last broker sync timestamp (ISO)."""
+        self.metrics["alpaca_last_sync"] = iso_ts
+        self._persist()
+
+    def get_metric(self, key: str, default=None):
+        return self.metrics.get(key, default)
+
+    def set_metric(self, key: str, value) -> None:
+        self.metrics[key] = value
+        self._persist()

@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.log
+.log*
 logs/
 .data/
 venv/
@@ -18,3 +19,4 @@ pytest_cache/
 /dist/
 *.egg-info/
 RUN_COMMANDS.md
+*.png

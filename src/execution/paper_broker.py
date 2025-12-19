@@ -46,6 +46,7 @@ class PaperBroker(Broker):
                         symbol=order.symbol,
                         quantity=order.quantity,
                         price=price,
+                        side=order.side,
                     )
                 )
                 to_remove.append(order_id)
@@ -62,6 +63,7 @@ class PaperBroker(Broker):
                             symbol=order.symbol,
                             quantity=order.quantity,
                             price=order.price,
+                            side=order.side,
                         )
                     )
                     to_remove.append(order_id)

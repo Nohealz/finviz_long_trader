@@ -36,7 +36,6 @@ class SymbolStats:
 
     def record_close(self, ts: str, realized: float) -> None:
         self.last_close_ts = ts
-        self.realized += realized
 
     @property
     def avg_entry(self) -> float:
@@ -68,7 +67,11 @@ def summarise(file_path: Path) -> Dict[str, SymbolStats]:
     return stats
 
 
-def summarise_and_write(file_path: Path, out_path: Optional[Path] = None) -> Tuple[str, Optional[Path]]:
+def summarise_and_write(
+    file_path: Path,
+    out_path: Optional[Path] = None,
+    max_invested: Optional[Tuple[float, Optional[str]]] = None,
+) -> Tuple[str, Optional[Path]]:
     stats = summarise(file_path)
     total_realized = sum(rec.realized for rec in stats.values())
     wins = [rec.realized for rec in stats.values() if rec.realized > 0]
@@ -82,6 +85,12 @@ def summarise_and_write(file_path: Path, out_path: Optional[Path] = None) -> Tup
 
     lines = []
     lines.append(f"Summary for {file_path.name}")
+    if max_invested is not None:
+        max_val, max_date = max_invested
+        date_str = max_date or "-"
+        lines.append(f"Max invested: {max_val:.2f} (date: {date_str})")
+    else:
+        lines.append("Max invested: -")
     lines.append(f"Symbols: {len(stats)} | Total realized PnL: {total_realized:.2f}")
     lines.append(
         f"Wins: {win_count} | Losses: {loss_count} | Flats: {flat_count} | "

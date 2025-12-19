@@ -67,6 +67,7 @@ class Fill(BaseModel):
     symbol: Symbol
     quantity: int
     price: float
+    side: Optional[OrderSide] = None
     timestamp: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
 
 
