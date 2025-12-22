@@ -27,6 +27,7 @@ from ..execution.alpaca_broker import AlpacaBroker
 from ..shared.time_utils import now
 from ..shared.pnl_logger import PnLLogger
 from ..tools.pnl_summary import summarise_and_write
+from ..tools.pnl_threshold_chart import generate_threshold_chart
 
 
 class Strategy:
@@ -556,6 +557,12 @@ class Strategy:
             pnl_path = candidates[0]
             output, out_file = summarise_and_write(pnl_path, max_invested=max_invested)
             self.logger.info("PnL summary written to %s", out_file)
+            if out_file:
+                try:
+                    chart_path, _, _ = generate_threshold_chart(out_file, step=0.25)
+                    self.logger.info("PnL threshold chart written to %s", chart_path)
+                except Exception as exc:
+                    self.logger.warning("PnL threshold chart failed: %s", exc)
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.error("Failed to generate PnL summary: %s", exc)
 

@@ -38,31 +38,25 @@ def parse_summary(path: pathlib.Path) -> List[Tuple[str, float, float]]:
     return rows
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--file", required=True, help="PnL summary log (e.g., data/pnl-summary-2025-12-16.log)")
-    parser.add_argument("--step", type=float, default=0.25, help="Increment for thresholds (default: 0.25)")
-    parser.add_argument("--output", default=None, help="Output PNG path (default: alongside input with -threshold.png)")
-    args = parser.parse_args()
-
-    summary_path = pathlib.Path(args.file)
+def generate_threshold_chart(
+    summary_path: pathlib.Path,
+    step: float = 0.25,
+    output_path: pathlib.Path | None = None,
+) -> tuple[pathlib.Path, List[float], List[float]]:
     rows = parse_summary(summary_path)
     if not rows:
-        raise SystemExit("No rows parsed from summary file")
+        raise ValueError("No rows parsed from summary file")
 
     max_price = max(r[1] for r in rows)
-    thresholds = []
-    pnl_values = []
+    thresholds: List[float] = []
+    pnl_values: List[float] = []
     t = 0.0
     while t <= max_price + 1e-9:
         thresholds.append(round(t, 2))
         pnl_values.append(round(sum(r[2] for r in rows if r[1] >= t), 2))
-        t += args.step
+        t += step
 
-    if args.output:
-        out_path = pathlib.Path(args.output)
-    else:
-        out_path = summary_path.with_name(f"{summary_path.stem}-threshold.png")
+    out_path = output_path or summary_path.with_name(f"{summary_path.stem}-threshold.png")
 
     plt.figure(figsize=(8, 4))
     plt.plot(thresholds, pnl_values, marker="o")
@@ -74,6 +68,23 @@ def main() -> None:
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150)
+    plt.close()
+    return out_path, thresholds, pnl_values
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", required=True, help="PnL summary log (e.g., data/pnl-summary-2025-12-16.log)")
+    parser.add_argument("--step", type=float, default=0.25, help="Increment for thresholds (default: 0.25)")
+    parser.add_argument("--output", default=None, help="Output PNG path (default: alongside input with -threshold.png)")
+    args = parser.parse_args()
+
+    summary_path = pathlib.Path(args.file)
+    out_path, thresholds, pnl_values = generate_threshold_chart(
+        summary_path,
+        step=args.step,
+        output_path=pathlib.Path(args.output) if args.output else None,
+    )
     print(f"Saved plot to {out_path}")
     for th, pnl in zip(thresholds, pnl_values):
         print(f"threshold >= ${th:.2f}: PnL = {pnl:.2f}")
