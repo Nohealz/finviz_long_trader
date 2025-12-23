@@ -58,6 +58,8 @@ class Strategy:
         self._last_backfill_attempt: dict[str, dt.datetime] = {}
         self._last_gate_state: bool | None = None
         self._reconciling: bool = False
+        self._blocked_symbols: set[str] = set()
+        self._blocked_symbols_date: str | None = None
         # On startup, reconcile local state with broker (Alpaca) to avoid drift.
         self._reconcile_state_with_broker()
         # Seed broker dedupe with persisted fill IDs if supported.
@@ -66,6 +68,7 @@ class Strategy:
 
     def run_tick(self) -> None:
         current = now(self.settings.TIMEZONE)
+        today = current.date().isoformat()
         # Refresh positions/orders from broker so local cache mirrors Alpaca.
         self._refresh_state_from_broker()
         sym_price_list = self.screener.get_symbols_with_prices()
@@ -79,17 +82,19 @@ class Strategy:
             if order.side == OrderSide.BUY and order.status in {OrderStatus.NEW, OrderStatus.WORKING}
         }
 
-        today = now(self.settings.TIMEZONE).date().isoformat()
         traded_today = {sym for sym, pos in all_positions.items() if pos.last_entry_date == today}
         # Also respect traded_dates map to block re-entries even after full close.
         for sym in set(self.state_store.traded_dates.keys()):
             if self.state_store.traded_dates.get(sym) == today:
                 traded_today.add(sym)
 
+        if self._blocked_symbols_date != today:
+            self._blocked_symbols_date = today
+            self._blocked_symbols.clear()
+
         # Gate: require screener refresh before trading (avoid stale previous-day list).
         screener_ok = True
         if self.settings.FINVIZ_REQUIRE_REFRESH_BEFORE_TRADING:
-            today = current.date().isoformat()
             last_date = self.state_store.get_metric("screener_date")
             if last_date != today:
                 # New day: reset screener gate
@@ -120,7 +125,7 @@ class Strategy:
             buy_candidates = [
                 sym
                 for sym in screener_symbols
-                if sym not in positions and sym not in pending_buys and sym not in traded_today
+                if sym not in positions and sym not in pending_buys and sym not in traded_today and sym not in self._blocked_symbols
             ]
 
         open_order_symbols = [
@@ -219,7 +224,16 @@ class Strategy:
                 status=OrderStatus.NEW,
                 tags=["entry"],
             )
-            placed = self.broker.place_order(order)
+            try:
+                placed = self.broker.place_order(order)
+            except Exception as exc:  # noqa: BLE001
+                err_msg = str(exc)
+                if "not tradable" in err_msg.lower():
+                    self._blocked_symbols.add(symbol)
+                    self.logger.warning("Buy order rejected (not tradable): %s", symbol)
+                else:
+                    self.logger.warning("Buy order failed for %s: %s", symbol, err_msg)
+                continue
             self.state_store.upsert_order(placed)
             if order_type == OrderType.LIMIT:
                 self.logger.info(
