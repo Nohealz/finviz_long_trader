@@ -60,15 +60,89 @@ class Strategy:
         self._reconciling: bool = False
         self._blocked_symbols: set[str] = set()
         self._blocked_symbols_date: str | None = None
+        self._market_hours_cache: dict[str, tuple[dt.time, dt.time, dt.time]] = {}
+        self._sod_cleanup_date: str | None = None
         # On startup, reconcile local state with broker (Alpaca) to avoid drift.
         self._reconcile_state_with_broker()
         # Seed broker dedupe with persisted fill IDs if supported.
         if isinstance(self.broker, AlpacaBroker):
             self.broker.processed_fills.update(self.state_store.processed_fill_ids)
 
+    def get_market_hours(self, current: dt.datetime) -> tuple[dt.time, dt.time, dt.time]:
+        """
+        Return premarket/open/close for the current date, honoring early closes (Alpaca calendar) when available.
+        """
+        iso_date = current.date().isoformat()
+        cached = self._market_hours_cache.get(iso_date)
+        if cached:
+            return cached
+        open_time = self.settings.REGULAR_OPEN
+        close_time = self.settings.REGULAR_CLOSE
+        if isinstance(self.broker, AlpacaBroker):
+            hours = self.broker.get_calendar_for_date(current.date())
+            if hours:
+                open_time, close_time = hours
+                if close_time != self.settings.REGULAR_CLOSE:
+                    self.logger.info("Early close detected for %s (close=%s)", iso_date, close_time)
+        result = (self.settings.PREMARKET_START, open_time, close_time)
+        self._market_hours_cache[iso_date] = result
+        return result
+
+    def _run_start_of_day_cleanup(self, today: str) -> bool:
+        """
+        Close any leftover positions and clear state at the start of a new day.
+        Returns True if cleanup was triggered (skip trading this tick).
+        """
+        if self._sod_cleanup_date == today:
+            return False
+
+        if isinstance(self.broker, AlpacaBroker):
+            positions = self.broker.list_positions()
+            open_orders = self.broker.get_open_orders()
+            if not positions and not open_orders:
+                self._sod_cleanup_date = today
+                return False
+            self.logger.info(
+                "SOD cleanup: closing %d positions and %d open orders",
+                len(positions),
+                len(open_orders),
+            )
+            try:
+                self.broker.close_all_positions(cancel_orders=True)
+            except Exception as exc:
+                self.logger.error("SOD cleanup close_all_positions failed: %s", exc)
+                return True
+            deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=self.settings.EOD_POLL_TIMEOUT_SECONDS)
+            while dt.datetime.now(dt.timezone.utc) < deadline:
+                if not self.broker.list_positions() and not self.broker.get_open_orders():
+                    break
+                time.sleep(self.settings.EOD_POLL_INTERVAL_SECONDS)
+            if self.broker.list_positions() or self.broker.get_open_orders():
+                self.logger.warning("SOD cleanup timed out; positions still open")
+                return True
+            self.state_store.clear()
+            self.logger.info("SOD cleanup complete; state cleared")
+            self._sod_cleanup_date = today
+            return True
+
+        if not self.state_store.positions and not self.state_store.orders:
+            self._sod_cleanup_date = today
+            return False
+        self.logger.info("SOD cleanup: clearing paper broker state")
+        try:
+            if hasattr(self.broker, "open_orders"):
+                self.broker.open_orders.clear()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        self.state_store.clear()
+        self._sod_cleanup_date = today
+        return True
+
     def run_tick(self) -> None:
         current = now(self.settings.TIMEZONE)
         today = current.date().isoformat()
+        if self._run_start_of_day_cleanup(today):
+            return
         # Refresh positions/orders from broker so local cache mirrors Alpaca.
         self._refresh_state_from_broker()
         sym_price_list = self.screener.get_symbols_with_prices()
@@ -411,20 +485,24 @@ class Strategy:
                 price,
             )
 
-    def run_eod_liquidation(self) -> None:
+    def run_eod_liquidation(self) -> bool:
         """
         End-of-day cleanup: cancel/close, capture fills, and clear state.
         """
         today = now(self.settings.TIMEZONE).date().isoformat()
         if self._eod_done_date == today:
-            return
+            return True
 
         if isinstance(self.broker, AlpacaBroker):
-            self._run_alpaca_eod(today)
+            success = self._run_alpaca_eod(today)
         else:
-            self._run_paper_eod(today)
+            success = self._run_paper_eod(today)
 
-    def _run_paper_eod(self, today: str) -> None:
+        if success:
+            self._eod_done_date = today
+        return success
+
+    def _run_paper_eod(self, today: str) -> bool:
         self.logger.info("EOD liquidation started (paper broker)")
         max_invested = self._get_max_invested_snapshot()
 
@@ -472,10 +550,10 @@ class Strategy:
             self.state_store.clear()
             self.logger.info("State cleared after EOD liquidation")
 
-        self._eod_done_date = today
         self._write_pnl_summary(today, max_invested=max_invested)
+        return True
 
-    def _run_alpaca_eod(self, today: str) -> None:
+    def _run_alpaca_eod(self, today: str) -> bool:
         self.logger.info("EOD liquidation started (Alpaca)")
         max_invested = self._get_max_invested_snapshot()
         close_started = now(self.settings.TIMEZONE).astimezone(dt.timezone.utc)
@@ -485,7 +563,7 @@ class Strategy:
             self.broker.close_all_positions(cancel_orders=True)
         except Exception as exc:
             self.logger.error("Failed to initiate Alpaca close_all_positions: %s", exc)
-            return
+            return False
 
         while True:
             fills = self.broker.get_fills_since(close_started)
@@ -508,7 +586,7 @@ class Strategy:
                     len(open_orders),
                 )
                 # Do not clear state if not flat; leave for next sync.
-                return
+                return False
 
             time.sleep(self.settings.EOD_POLL_INTERVAL_SECONDS)
 
@@ -523,10 +601,10 @@ class Strategy:
             self.state_store.clear()
             self.logger.info("State cleared after EOD liquidation")
 
-        self._eod_done_date = today
         # Rebuild PnL log from Alpaca fills and write summary to ensure accuracy.
         self._rebuild_pnl_log(dt.date.fromisoformat(today))
         self._write_pnl_summary(today, max_invested=max_invested)
+        return True
 
     def _get_max_invested_snapshot(self) -> tuple[float, str | None] | None:
         val = self.state_store.metrics.get("max_invested_value")
@@ -573,7 +651,13 @@ class Strategy:
             self.logger.info("PnL summary written to %s", out_file)
             if out_file:
                 try:
-                    chart_path, _, _ = generate_threshold_chart(out_file, step=0.25)
+                    chart_output = None
+                    pnl_name = pnl_path.name
+                    if pnl_name.startswith("pnl-") and pnl_name.endswith(".log"):
+                        date_part = pnl_name[len("pnl-") : -len(".log")]
+                        if date_part:
+                            chart_output = pnl_path.with_name(f"pnl-threshold-{date_part}.png")
+                    chart_path, _, _ = generate_threshold_chart(out_file, step=0.25, output_path=chart_output)
                     self.logger.info("PnL threshold chart written to %s", chart_path)
                 except Exception as exc:
                     self.logger.warning("PnL threshold chart failed: %s", exc)

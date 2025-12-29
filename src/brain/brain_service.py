@@ -62,6 +62,7 @@ def build_services(logger: logging.Logger | None = None) -> MinuteScheduler:
     strategy = Strategy(settings, screener, fill_data, buy_data, broker, state_store, logger=app_logger)
     scheduler = MinuteScheduler(settings, tick=strategy.run_tick, logger=app_logger)
     scheduler.set_eod_callback(strategy.run_eod_liquidation)
+    scheduler.set_market_hours_provider(strategy.get_market_hours)
     return scheduler
 
 

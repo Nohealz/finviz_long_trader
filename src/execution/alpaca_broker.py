@@ -9,7 +9,7 @@ from alpaca.data.models import Quote as AlpacaQuote
 from alpaca.data.requests import StockLatestQuoteRequest, StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide as AlpacaOrderSide, OrderType as AlpacaOrderType, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest, GetCalendarRequest
 from alpaca.trading.models import TradeActivity
 
 from src.brain.models import Fill, Order, OrderSide, OrderStatus, OrderType, Quote
@@ -122,6 +122,17 @@ class AlpacaBroker(Broker):
         except Exception as exc:
             self.logger.error("Alpaca close_all_positions failed: %s", exc)
             raise
+
+    def get_calendar_for_date(self, date: dt.date) -> tuple[dt.time, dt.time] | None:
+        try:
+            calendars = self.trading.get_calendar(GetCalendarRequest(start=date, end=date))
+            if not calendars:
+                return None
+            day = calendars[0]
+            return day.open.time(), day.close.time()
+        except Exception as exc:
+            self.logger.warning("Alpaca calendar fetch failed for %s: %s", date, exc)
+            return None
 
     def get_fills_since(self, after: dt.datetime, include_processed: bool = False) -> List[Fill]:
         fills: List[Fill] = []
