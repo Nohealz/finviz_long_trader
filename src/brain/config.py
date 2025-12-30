@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     EOD_CLEAR_STATE: bool = True
     EOD_POLL_INTERVAL_SECONDS: int = Field(default=3, ge=1, description="Polling cadence (seconds) while waiting for EOD fills.")
     EOD_POLL_TIMEOUT_SECONDS: int = Field(default=180, ge=30, description="Maximum time to wait for EOD closeout to complete.")
+    EOD_PRE_CLOSE_MINUTES: int = Field(
+        default=5,
+        ge=0,
+        description="Minutes before the market close to trigger EOD liquidation.",
+    )
 
     # Alpaca configuration
     ALPACA_API_KEY: str | None = None

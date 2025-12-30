@@ -485,7 +485,7 @@ class Strategy:
                 price,
             )
 
-    def run_eod_liquidation(self) -> bool:
+    def run_eod_liquidation(self, force_after_hours: bool = False) -> bool:
         """
         End-of-day cleanup: cancel/close, capture fills, and clear state.
         """
@@ -494,7 +494,7 @@ class Strategy:
             return True
 
         if isinstance(self.broker, AlpacaBroker):
-            success = self._run_alpaca_eod(today)
+            success = self._run_alpaca_eod(today, force_after_hours=force_after_hours)
         else:
             success = self._run_paper_eod(today)
 
@@ -553,14 +553,19 @@ class Strategy:
         self._write_pnl_summary(today, max_invested=max_invested)
         return True
 
-    def _run_alpaca_eod(self, today: str) -> bool:
+    def _run_alpaca_eod(self, today: str, force_after_hours: bool = False) -> bool:
         self.logger.info("EOD liquidation started (Alpaca)")
         max_invested = self._get_max_invested_snapshot()
         close_started = now(self.settings.TIMEZONE).astimezone(dt.timezone.utc)
         deadline = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=self.settings.EOD_POLL_TIMEOUT_SECONDS)
 
         try:
-            self.broker.close_all_positions(cancel_orders=True)
+            use_limit = force_after_hours or not self.broker.is_market_open()
+            if use_limit:
+                self.logger.info("Using limit orders for after-hours liquidation")
+                self.broker.close_all_positions_limit(limit_price=0.01, cancel_orders=True)
+            else:
+                self.broker.close_all_positions(cancel_orders=True)
         except Exception as exc:
             self.logger.error("Failed to initiate Alpaca close_all_positions: %s", exc)
             return False

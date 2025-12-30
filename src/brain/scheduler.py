@@ -44,11 +44,18 @@ class MinuteScheduler:
                 premarket_start = self.settings.PREMARKET_START
                 regular_open = self.settings.REGULAR_OPEN
                 regular_close = self.settings.REGULAR_CLOSE
+            eod_trigger_time = regular_close
+            if self.settings.EOD_PRE_CLOSE_MINUTES:
+                trigger_dt = dt.datetime.combine(current.date(), regular_close) - dt.timedelta(
+                    minutes=self.settings.EOD_PRE_CLOSE_MINUTES
+                )
+                eod_trigger_time = trigger_dt.time()
+            effective_close = min(regular_close, eod_trigger_time)
             if is_within_trading_hours(
                 current,
                 premarket_start,
                 regular_open,
-                regular_close,
+                effective_close,
                 allow_weekends=self.settings.ALLOW_WEEKEND_TRADING,
             ):
                 self.logger.info("Tick at %s", current)
@@ -61,13 +68,13 @@ class MinuteScheduler:
                     "Outside trading hours; skipping tick at %s (window %s-%s %s)",
                     current,
                     premarket_start,
-                    regular_close,
+                    effective_close,
                     self.settings.TIMEZONE,
                 )
                 # If we are past the regular close and haven't run EOD yet, run it once here.
                 if (
                     self._eod_callback
-                    and current.time() >= regular_close
+                    and current.time() >= eod_trigger_time
                     and self._eod_done_date != current.date().isoformat()
                     and (self.settings.ALLOW_WEEKEND_TRADING or current.weekday() < 5)
                 ):

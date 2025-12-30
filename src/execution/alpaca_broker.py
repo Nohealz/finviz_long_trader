@@ -123,6 +123,48 @@ class AlpacaBroker(Broker):
             self.logger.error("Alpaca close_all_positions failed: %s", exc)
             raise
 
+    def close_all_positions_limit(self, limit_price: float = 0.01, cancel_orders: bool = True) -> None:
+        try:
+            if cancel_orders:
+                self.trading.cancel_orders()
+        except Exception as exc:
+            self.logger.warning("Alpaca cancel_orders failed before limit close: %s", exc)
+        try:
+            positions = self.trading.get_all_positions()
+        except Exception as exc:
+            self.logger.error("Alpaca get_all_positions failed: %s", exc)
+            raise
+        for p in positions:
+            try:
+                qty = int(p.qty)
+            except Exception:
+                continue
+            if qty <= 0:
+                continue
+            side = AlpacaOrderSide.SELL
+            if getattr(p, "side", "").lower() == "short":
+                side = AlpacaOrderSide.BUY
+            req = LimitOrderRequest(
+                symbol=p.symbol,
+                qty=qty,
+                side=side,
+                time_in_force=TimeInForce.DAY,
+                limit_price=limit_price,
+                extended_hours=True,
+            )
+            try:
+                self.trading.submit_order(req)
+            except Exception as exc:
+                self.logger.warning("Alpaca limit close failed for %s: %s", p.symbol, exc)
+
+    def is_market_open(self) -> bool:
+        try:
+            clock = self.trading.get_clock()
+            return bool(clock.is_open)
+        except Exception as exc:
+            self.logger.warning("Alpaca clock fetch failed: %s", exc)
+            return True
+
     def get_calendar_for_date(self, date: dt.date) -> tuple[dt.time, dt.time] | None:
         try:
             calendars = self.trading.get_calendar(GetCalendarRequest(start=date, end=date))

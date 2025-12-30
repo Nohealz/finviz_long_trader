@@ -14,6 +14,7 @@ echo.
 echo ===== finviz_long_trader menu =====
 echo [1] Start brains service
 echo [2] Force EOD liquidation (run_eod_now)
+echo [10] Force EOD liquidation after-hours (limit orders)
 echo [3] Run tests (pytest)
 echo [4] Refresh dependencies (pip -r requirements.txt)
 echo [5] Intraday high-of-day check (intraday_high)
@@ -27,6 +28,7 @@ set /p choice=Select an option:
 
 if "%choice%"=="1" goto brains
 if "%choice%"=="2" goto eod
+if "%choice%"=="10" goto eod_after
 if "%choice%"=="3" goto tests
 if "%choice%"=="4" goto deps
 if "%choice%"=="5" goto intraday
@@ -45,6 +47,11 @@ goto aftercmd
 :eod
 cd /d "%ROOT%"
 %PY% -m src.brain.run_eod_now
+goto aftercmd
+
+:eod_after
+cd /d "%ROOT%"
+%PY% -m src.brain.run_eod_now --after-hours
 goto aftercmd
 
 :tests
